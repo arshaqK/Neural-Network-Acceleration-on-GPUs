@@ -47,7 +47,7 @@ This report explores the performance acceleration of a simple fully connected ne
         
     - `backward()`: [49.039s]
 
-![image](https://github.com/user-attachments/assets/59c31fda-e70b-4095-abd5-df05c479ee3b)
+
 
 
 **Observations:**  
