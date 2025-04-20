@@ -1,6 +1,6 @@
 #ifndef CONNECTOR_H
 #define CONNECTOR_H
-
+#include <cuda_runtime.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -8,12 +8,12 @@ extern "C" {
 //cuda network memory structure initializer
 typedef struct CudaNetwork CudaNetwork;
 
-
-
 // Initialize CUDA and create network
 CudaNetwork* createCudaNetwork(double** W1, double** W2, double* b1, double* b2);
 
 // Train the network using CUDA
+void cudaForward(CudaNetwork* net, int batch_size, cudaStream_t stream);
+void cudaBackward(CudaNetwork* net, int batch_size, cudaStream_t stream);
 void trainWithCuda(CudaNetwork* cuda_net, double** images, double** labels, int numImages);
 
 // Update host network after CUDA training

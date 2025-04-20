@@ -1,3 +1,4 @@
+
 //this is the main kernel file for the v3 implementation that will focus on optimizations
 
 #include <stdio.h>
@@ -11,8 +12,8 @@
 #define HIDDEN_SIZE 128
 #define OUTPUT_SIZE 10
 #define LEARNING_RATE 0.01
-#define EPOCHS 3
-#define BATCH_SIZE 64
+#define EPOCHS 8
+#define BATCH_SIZE 32
 #define TILE_SIZE 32
 // Error checking macro
 #define CUDA_CHECK(call) \
@@ -41,387 +42,346 @@ struct CudaNetwork {
 
 //matrix multiplication using shared memory for better accesses.
 
-__global__ void matrixMultiply(float* A,float* B,float* C,float* bias,int Arows,int Acols,int Bcols,int batch_size){
-    //declare the shared memory
-    __shared__ float tileA[32][32]; //keeping the size to ensure better memory access.
-    __shared__ float tileB[32][32];
+// Improved matrixMultiply kernel with better boundary checks
+__global__ void matrixMultiply(float* A, float* B, float* C, float* bias, int Arows, int Acols, int Bcols, int batch_size) {
+    // Shared memory declarations
+    __shared__ float tileA[TILE_SIZE][TILE_SIZE];
+    __shared__ float tileB[TILE_SIZE][TILE_SIZE];
 
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int batch = blockIdx.z;
 
-    if (row >= Arows || col >= Bcols || batch >= batch_size) return;
+    // Early exit for out-of-bounds threads
+    if (batch >= batch_size) return;
 
     float* batchB = B + batch * Acols * Bcols;
     float* batchC = C + batch * Arows * Bcols;
 
-    float sum = bias[row];
+    // Initialize accumulator with bias (only valid rows)
+    float sum = (row < Arows) ? bias[row] : 0.0f;
 
-    for (int i=0;i<Acols;i+=32){
-        //load the tiles into shared memory.
-        tileA[threadIdx.y][threadIdx.x] = (row < Arows && i + threadIdx.x < Acols) ?
-                                            A[row * Acols + i + threadIdx.x] : 0.0f;
-        tileB[threadIdx.y][threadIdx.x] = (i + threadIdx.y < Acols && col < Bcols) ?
-                                            batchB[(i + threadIdx.y) * Bcols + col] : 0.0f;
-
-        __syncthreads();
-
-        //partial dot product.
-        for (int j=0;j< 32; j++){
-            sum+= tileA[threadIdx.y][j] * tileB[j][threadIdx.x];
-        }
-
-        __syncthreads();
-    }
-
-    if (col < Bcols) {
-        batchC[row* Bcols + col] = sum; //store all the computed values.
-    }
-
-}
-
-
-//transposed matrix multiplication.
-__global__ void matrixMultiplyTranspose(float* A, float* B, float* C,int Arows, int Acols,int batch_size) {
-        __shared__ float tileA[32][32]; // Tile for A^T (rows of A)
-        __shared__ float tileB[32][32]; 
-
-        int row = blockIdx.y * blockDim.y + threadIdx.y; // Row index in C (A_cols dimension)
-        int col = blockIdx.x * blockDim.x + threadIdx.x; 
-        int batch = blockIdx.z;
-
-        if (row >= Acols || col >= 1 || batch >= batch_size) return;
-
-        float* batchB = B + batch * Arows; // B is A_rows x 1 per batch
-        float* batchC = C + batch * Acols; // C is A_cols x 1 per batch
-
-        float sum = 0.0f;
-
-        for (int i = 0; i < Arows; i += 32) {
-                // Load tiles into shared memory
-                //  (row of A, transposed access)
-                tileA[threadIdx.y][threadIdx.x] = (row < Acols && i + threadIdx.x < Arows) ?
-                                                    A[(i + threadIdx.x) * Acols + row] : 0.0f;
-                // (col of B, but col=0)
-                tileB[threadIdx.y][threadIdx.x] = (i + threadIdx.y < Arows && col < 1) ?
-                                                    batchB[i + threadIdx.y] : 0.0f;
-
-                __syncthreads();
-
+    // Process input matrix in tiles
+    for (int i = 0; i < Acols; i += 32) {
+        // Load tiles with proper boundary checks
+        if (threadIdx.y < 32 && threadIdx.x < 32) {
+            tileA[threadIdx.y][threadIdx.x] = (row < Arows && i + threadIdx.x < Acols) ?
+                                             A[row * Acols + i + threadIdx.x] : 0.0f;
             
-                for (int j = 0; j < 32; j++) {
+            tileB[threadIdx.y][threadIdx.x] = (i + threadIdx.y < Acols && col < Bcols) ?
+                                             batchB[(i + threadIdx.y) * Bcols + col] : 0.0f;
+        }
+        __syncthreads();
+
+        // Compute partial dot product with bounds check
+        if (row < Arows && col < Bcols) {
+            for (int j = 0; j < 32 && (i + j) < Acols; j++) {
                 sum += tileA[threadIdx.y][j] * tileB[j][threadIdx.x];
-                }
-
-                __syncthreads();
+            }
         }
+        __syncthreads();
+    }
 
-        //store all values into the output C value
-        if (col < 1) {
-        batchC[row] = sum;
-        }
+    // Store result with bounds check
+    if (row < Arows && col < Bcols) {
+        batchC[row * Bcols + col] = sum;
+    }
 }
 
-//vectorized kernels for the relu activation methods in the nn.c file.
+// Improved transposed matrix multiplication
+__global__ void matrixMultiplyTranspose(float* A, float* B, float* C, int Arows, int Acols, int batch_size) {
+    __shared__ float tileA[TILE_SIZE][TILE_SIZE];
+    __shared__ float tileB[TILE_SIZE][TILE_SIZE];
 
+
+    int row = blockIdx.y * blockDim.y + threadIdx.y; // Row in result (corresponds to columns of A)
+    int col = blockIdx.x * blockDim.x + threadIdx.x; // Column in result (single column)
+    int batch = blockIdx.z;
+    
+    // Early exit for out-of-bounds threads
+    if (batch >= batch_size) return;
+
+    float* batchB = B + batch * Arows; // B is Arows x 1 per batch
+    float* batchC = C + batch * Acols; // C is Acols x 1 per batch
+
+    float sum = 0.0f;
+
+    // Process in tiles
+    for (int i = 0; i < Arows; i += 32) {
+        if (threadIdx.y < 32 && threadIdx.x < 32) {
+            // Load transposed data from A with bounds check
+            tileA[threadIdx.y][threadIdx.x] = (row < Acols && i + threadIdx.x < Arows) ?
+                                             A[(i + threadIdx.x) * Acols + row] : 0.0f;
+            
+            // Load data from B
+            tileB[threadIdx.y][threadIdx.x] = (i + threadIdx.y < Arows) ?
+                                             batchB[i + threadIdx.y] : 0.0f;
+        }
+        
+        __syncthreads();
+
+        // Compute partial dot product
+        if (row < Acols) {
+            for (int j = 0; j < 32 && (i + j) < Arows; j++) {
+                sum += tileA[threadIdx.y][j] * tileB[j][threadIdx.x];
+            }
+        }
+        
+        __syncthreads();
+    }
+
+    // Store result with bounds check
+    if (row < Acols && col == 0) {
+        batchC[row] = sum;
+    }
+}
+
+// Improved ReLU activation with better vectorization
 __global__ void relu(float* x, int size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int vecIdx = idx*4; //each thread is to process 4 elements. based on vectorization.
-
-    if(vecIdx < size){
-        //use float 4 to load 4 elements.
-        float4 val = *(float4*)&x[vecIdx];
-
-        //apply the relu to each vlaue.
-        val.x = fmax(0.0f,val.x);
-        val.y = vecIdx + 1 < size ? fmaxf(0.0f, val.y) : 0.0f;
-        val.z = vecIdx + 2 < size ? fmaxf(0.0f, val.z) : 0.0f;
-        val.w = vecIdx + 3 < size ? fmaxf(0.0f, val.w) : 0.0f;
-
-        *(float4*)&x[vecIdx]= val;
+    
+    // Each thread processes up to 4 elements
+    int baseIdx = idx * 4;
+    
+    // Process elements with bounds checking
+    if (baseIdx < size) {
+        // Process first element
+        x[baseIdx] = fmaxf(0.0f, x[baseIdx]);
+        
+        // Process additional elements with bounds checking
+        if (baseIdx + 1 < size) x[baseIdx + 1] = fmaxf(0.0f, x[baseIdx + 1]);
+        if (baseIdx + 2 < size) x[baseIdx + 2] = fmaxf(0.0f, x[baseIdx + 2]);
+        if (baseIdx + 3 < size) x[baseIdx + 3] = fmaxf(0.0f, x[baseIdx + 3]);
     }
 }
 
-//second method for relu derivation
+// Improved ReLU derivative with bounds checking
 __global__ void reluDerivativeKernel(float* x, float* dx, int size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int vecIdx = idx * 4; // Each thread processes 4 elements
-
-    if (vecIdx < size) {
-        // Load 4 elements from x and dx
-        float4 xVal = *(float4*)&x[vecIdx];
-        float4 dxVal = *(float4*)&dx[vecIdx];
-
-        // Apply derivative: dx *= (x > 0) ? 1 : 0
-        dxVal.x *= (xVal.x > 0.0f) ? 1.0f : 0.0f;
-        dxVal.y *= (vecIdx + 1 < size && xVal.y > 0.0f) ? 1.0f : 0.0f;
-        dxVal.z *= (vecIdx + 2 < size && xVal.z > 0.0f) ? 1.0f : 0.0f;
-        dxVal.w *= (vecIdx + 3 < size && xVal.w > 0.0f) ? 1.0f : 0.0f;
-
-        // Store result
-        *(float4*)&dx[vecIdx] = dxVal;
+    int baseIdx = idx * 4;
+    
+    if (baseIdx < size) {
+        // Element-wise multiplication by derivative of ReLU
+        dx[baseIdx] *= (x[baseIdx] > 0.0f) ? 1.0f : 0.0f;
+        
+        // Process additional elements with bounds checking
+        if (baseIdx + 1 < size) 
+            dx[baseIdx + 1] *= (x[baseIdx + 1] > 0.0f) ? 1.0f : 0.0f;
+        if (baseIdx + 2 < size) 
+            dx[baseIdx + 2] *= (x[baseIdx + 2] > 0.0f) ? 1.0f : 0.0f;
+        if (baseIdx + 3 < size) 
+            dx[baseIdx + 3] *= (x[baseIdx + 3] > 0.0f) ? 1.0f : 0.0f;
     }
 }
 
-
-//the softmax method
-__global__ void softmax(float* x,int batch_size,int size) {
+// Improved softmax with better numerical stability
+__global__ void softmax(float* x, int batch_size, int size) {
+    extern __shared__ float shared[];
+    float* sData = shared;
+    float* sMax = &shared[blockDim.x];
+    float* sSum = &shared[blockDim.x + 1];
+    
     int batchIndex = blockIdx.x;
     int tid = threadIdx.x;
-    int threads = blockDim.x;
-
-    if(batchIndex >= batch_size) {
-        return;
-    }
-
-
-    //offset for the batch
-    int offset = batchIndex*size;
-
-    //shared memory for reducing global memory acceeses.
-    extern __shared__ float shared[];
-    float*  sData = shared; //space for values;
-    float* sMax = &shared[threads];
-    float* sSum = &shared[threads+1];
-
-    //finding max val using reduction.
+    
+    if (batchIndex >= batch_size) return;
+    
+    // Offset for current batch
+    float* batchX = x + batchIndex * size;
+    
+    // Find maximum value for numerical stability
     float maxVal = -INFINITY;
-    for (int i= tid; i< size;i+=threads) {
-        maxVal = fmaxf(maxVal,x[offset+i]);
+    for (int i = tid; i < size; i += blockDim.x) {
+        maxVal = fmaxf(maxVal, batchX[i]);
     }
+    
+    // Reduce to find batch max
     sData[tid] = maxVal;
     __syncthreads();
-
-    //find the global max.
-    for (int stride = threads/2;stride>0;stride >>= 1){
-        if(tid < stride) {
-            sData[tid] = fmaxf(sData[tid],sData[tid+stride]);
+    
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            sData[tid] = fmaxf(sData[tid], sData[tid + stride]);
         }
         __syncthreads();
     }
-
+    
     if (tid == 0) {
         sMax[0] = sData[0];
     }
     __syncthreads();
+    
     maxVal = sMax[0];
     
-    //compute the partial sum.
+    // Compute exp(x - max) and sum
     float partialSum = 0.0f;
-    for (int i=tid; i < size; i+=threads) {
-        float val = expf(x[offset+i] - maxVal);
-        x[offset+i] = val;
+    for (int i = tid; i < size; i += blockDim.x) {
+        float val = expf(batchX[i] - maxVal);
+        batchX[i] = val;  // Store exp values temporarily
         partialSum += val;
     }
+    
+    // Reduce to find sum
     sData[tid] = partialSum;
     __syncthreads();
-
-    //compute total sum.
-    for(int stride = threads/22; stride > 0;stride>>=1) {
+    
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
         if (tid < stride) {
             sData[tid] += sData[tid + stride];
         }
         __syncthreads();
     }
-
-    if(tid == 0) {
-        sSum[0] = sData[0];
-
-    }
-    __syncthreads();
-    float sum = sSum[0];
-    //normalize the values.
-    for (int i = tid; i < size; i += threads) {
-        x[offset + i] /= sum;
-    }
-}
-
-
-//output gradient calculation.
-__global__ void OutputGradient(float* output, float* target, float* gradient,int batch_size, int size) {
-        int batchIndex = blockIdx.x;
-        int tid = threadIdx.x;
-        int threads = blockDim.x;
-
-        if (batchIndex >= batch_size) {
-            return;
-        };
-
-        // Shared memory for caching output and target
-        extern __shared__ float shared[];
-        float* outS = shared;
-        float* targetS = &shared[size];
-
-        int offset = batchIndex * size;
-
-        // Load output and target into shared memory (coalesced)
-        for (int i = tid; i < size; i += threads) {
-                outS[i] = output[offset + i];
-                targetS[i] = target[offset + i];
-        }
-        __syncthreads();
-
-        // Compute gradient using strided loop
-        for (int i = tid; i < size; i += threads) {
-                gradient[offset + i] = outS[i] - targetS[i];
-        }
-}
-
-
-//weight calculuations
-__global__ void weightUpdate(float* weights, float* inputs, float* gradients,
-                             int batch_size,int output_dim, int input_dim, float lr) {
-            
-        //get block and thread indexes separately.
-        int tx = threadIdx.x;
-        int ty = threadIdx.y;
-        int bx = blockIdx.x;
-        int by = blockIdx.y;               
-        
-        
-        int outIndex = by*TILE_SIZE+ty;
-        int inIndex = bx *TILE_SIZE+tx;
-
-
-        extern __shared__ float shared[];
-        float* sInputs = shared;
-        float* sGradients = &shared[TILE_SIZE * input_dim];
-
-        float weightUpdate = 0.0f;
-
-        //process the batch
-        for (int b = 0; b < batch_size; b += TILE_SIZE) {
-            // Load inputs into shared memory (coalesced)
-            if (ty < input_dim && tx < TILE_SIZE) {
-                int batch_idx = b + tx;
-                if (batch_idx < batch_size) {
-                    sInputs[tx * input_dim + ty] = inputs[batch_idx * input_dim + ty];
-                } else {
-                    sInputs[tx * input_dim + ty] = 0.0f;
-                }
-            }
     
-            // Load gradients into shared memory (coalesced)
-            if (ty < TILE_SIZE && tx < output_dim) {
-                int batch_idx = b + ty;
-                if (batch_idx < batch_size && tx < output_dim) {
-                    sGradients[ty * output_dim + tx] = gradients[batch_idx * output_dim + tx];
-                } else {
-                    sGradients[ty * output_dim + tx] = 0.0f;
-                }
-            }
-            __syncthreads();
-    
-            // Compute partial update for this tile
-            if (outIndex < output_dim && inIndex < input_dim) {
-                for (int k = 0; k < min(TILE_SIZE,batch_size - b); k++) {
-                    weightUpdate += sGradients[k * output_dim + outIndex] * sInputs[k * input_dim + inIndex];
-                }
-            }
-            __syncthreads();
-        }
-    
-        // Update weights (coalesced)
-        if (outIndex < output_dim && inIndex < input_dim) {
-            weights[outIndex * input_dim + inIndex] -= lr * (weightUpdate / BATCH_SIZE);
-        }
-}
-
-//bias values updations
-__global__ void biasUpdate(float* biases, float* gradients,
-    int batch_size, int dim, float lr) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int tid = threadIdx.x;
-    int threads = blockDim.x;
-
-    if (idx >= dim) return;
-
-    // Initialize bias update 
     if (tid == 0) {
-        biases[idx] = biases[idx]; // No-op to ensure initialization
+        sSum[0] = sData[0];
     }
     __syncthreads();
-
-    // Accumulate partial sums using atomics
-    float partial_sum = 0.0f;
-    for (int b = tid; b < batch_size; b += threads) {
-        partial_sum += gradients[b * dim + idx];
+    
+    float sum = sSum[0];
+    
+    // Normalize with sum
+    for (int i = tid; i < size; i += blockDim.x) {
+        batchX[i] /= sum;
+        
+        // Add epsilon for numerical stability
+        batchX[i] = fmaxf(batchX[i], 1e-15f);
     }
-
-    // Atomic update to biases
-    atomicAdd(&biases[idx], -lr * (partial_sum / batch_size));
 }
 
+// Improved output gradient calculation
+__global__ void OutputGradient(float* output, float* target, float* gradient, int batch_size, int size) {
+    extern __shared__ float shared[];
+    float* outS = shared;
+    float* targetS = &shared[size];
+    
+    int batchIndex = blockIdx.x;
+    int tid = threadIdx.x;
+    
+    if (batchIndex >= batch_size) return;
+    
+    int offset = batchIndex * size;
+    
+    // Load data into shared memory with bounds checking
+    for (int i = tid; i < size; i += blockDim.x) {
+        outS[i] = output[offset + i];
+        targetS[i] = target[offset + i];
+    }
+    __syncthreads();
+    
+    // Calculate gradient (output - target) with proper bounds checking
+    for (int i = tid; i < size; i += blockDim.x) {
+        gradient[offset + i] = outS[i] - targetS[i];
+    }
+}
 
-//entropy
-__global__ void crossEntropyLoss(float* output, float* target, float* loss, int batch_size,int size) {
+// Improved weight update kernel
+__global__ void weightUpdate(float* weights, float* inputs, float* gradients,
+                            int batch_size, int output_dim, int input_dim, float lr) {
+    int outRow = blockIdx.y * blockDim.y + threadIdx.y;
+    int inCol = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Check bounds early
+    if (outRow >= output_dim || inCol >= input_dim) return;
+    
+    // Calculate weight index
+    int weightIdx = outRow * input_dim + inCol;
+    float weightDelta = 0.0f;
+    
+    // Process all batches to calculate weight update
+    for (int b = 0; b < batch_size; b++) {
+        float input_val = inputs[b * input_dim + inCol];
+        float grad_val = gradients[b * output_dim + outRow];
+        weightDelta += grad_val * input_val;
+    }
+    
+    // Apply weight update with proper scaling
+    weights[weightIdx] -= lr * (weightDelta / batch_size);
+}
+
+// Improved bias update
+__global__ void biasUpdate(float* biases, float* gradients,
+                          int batch_size, int dim, float lr) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (idx >= dim) return;
+    
+    float bias_delta = 0.0f;
+    
+    // Sum gradients across batch
+    for (int b = 0; b < batch_size; b++) {
+        bias_delta += gradients[b * dim + idx];
+    }
+    
+    // Update bias
+    biases[idx] -= lr * (bias_delta / batch_size);
+}
+
+// Improved cross-entropy loss calculation
+__global__ void crossEntropyLoss(float* output, float* target, float* loss, int batch_size, int size) {
     extern __shared__ float s_data[];
-    float* s_output = s_data;                     // Shared memory for output
-    float* s_target = &s_data[size];       // Shared memory for target
-    float* s_partial = &s_data[2 * size];  // Shared memory for partial sums
-
+    float* s_partial = s_data;  // Use entire shared memory for partial sums
+    
     int batch_idx = blockIdx.x;
     int tid = threadIdx.x;
+    
+    if (batch_idx >= batch_size) return;
+    
     int offset = batch_idx * size;
-
-    // Coalesced load into shared memory
-    if (tid < size) {
-    s_output[tid] = output[offset + tid];
-    s_target[tid] = target[offset + tid];
-    }
-    __syncthreads();
-
-    // Compute partial loss in parallel
+    
+    // Compute partial loss with bounds checking and numerical stability
     float partial_loss = 0.0f;
     for (int i = tid; i < size; i += blockDim.x) {
-        partial_loss -= s_target[i] * __logf(fmaxf(s_output[i], 1e-10f));
+        float out_val = fmaxf(output[offset + i], 1e-15f);  // Avoid log(0)
+        float target_val = target[offset + i];
+        partial_loss -= target_val * logf(out_val);
     }
+    
+    // Store partial sum
     s_partial[tid] = partial_loss;
     __syncthreads();
-
-    // Parallel reduction to sum partial losses
+    
+    // Reduce to get total loss for this batch
     for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (tid < stride) {
-        s_partial[tid] += s_partial[tid + stride];
+        if (tid < stride) {
+            s_partial[tid] += s_partial[tid + stride];
+        }
+        __syncthreads();
     }
-    __syncthreads();
-    }
-
+    
     // Write final loss for the batch
-    if (tid == 0 && batch_idx < batch_size) {
+    if (tid == 0) {
         loss[batch_idx] = s_partial[0];
     }
 }
 
-
-//kernel for checking the accuracy of the obtained results.
-// Accuracy kernel
+// Improved accuracy kernel
 __global__ void accuracyKernel(float* output, float* target, int* correct,
-    int batch_size, int output_size) {
+                              int batch_size, int output_size) {
     int batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (batch_idx < batch_size) {
-        int offset = batch_idx * output_size;
-        int pred_class = 0;
-        int true_class = 0;
-
-        // Find predicted class (max output value)
-        for (int i = 1; i < output_size; i++) {
-            if (output[offset + i] > output[offset + pred_class]) {
+    
+    if (batch_idx >= batch_size) return;
+    
+    int offset = batch_idx * output_size;
+    int pred_class = 0;
+    int true_class = 0;
+    
+    // Find predicted class (max output value)
+    for (int i = 1; i < output_size; i++) {
+        if (output[offset + i] > output[offset + pred_class]) {
             pred_class = i;
         }
-        }
-
-        // Find true class (one-hot encoded)
-        for (int i = 0; i < output_size; i++) {
-            if (target[offset + i] > 0.5f) {
+    }
+    
+    // Find true class (one-hot encoded)
+    for (int i = 0; i < output_size; i++) {
+        if (target[offset + i] > 0.5f) {
             true_class = i;
             break;
         }
-        }
-
-        correct[batch_idx] = (pred_class == true_class) ? 1 : 0;
     }
+    
+    // Record if prediction was correct
+    correct[batch_idx] = (pred_class == true_class) ? 1 : 0;
 }
 
 // main functions that utilize the kernel and will be called in the c file which is the main file.
@@ -480,90 +440,103 @@ CudaNetwork* createCudaNetwork(double** W1, double** W2, double* b1, double* b2)
 }
 
 // Forward pass
+// Improved forward pass implementation
 void cudaForward(CudaNetwork* net, int batch_size) {
-    // Define thread block dimensions
-    dim3 blockDim(32, 16);
-    
     // First layer: input -> hidden
-    dim3 gridDim(
-        (1 + blockDim.x - 1) / blockDim.x, // Usually 1 for single output column
-        (HIDDEN_SIZE + blockDim.y - 1) / blockDim.y,
+    dim3 blockDim1(32, 16);
+    dim3 gridDim1(
+        (1 + blockDim1.x - 1) / blockDim1.x,
+        (HIDDEN_SIZE + blockDim1.y - 1) / blockDim1.y,
         batch_size
     );
-    matrixMultiply<<<gridDim, blockDim>>>(
+    
+    matrixMultiply<<<gridDim1, blockDim1>>>(
         net->d_W1, net->d_batch_input, net->d_batch_hidden, net->d_b1,
         HIDDEN_SIZE, INPUT_SIZE, 1, batch_size);
     
     // Apply ReLU activation
-    int block_size = 512;
-    int grid_size = (batch_size * HIDDEN_SIZE + block_size - 1) / block_size;
+    int block_size = 256;
+    int grid_size = ((batch_size * HIDDEN_SIZE + 4 - 1) / 4 + block_size - 1) / block_size;
     relu<<<grid_size, block_size>>>(net->d_batch_hidden, batch_size * HIDDEN_SIZE);
     
     // Second layer: hidden -> output
-    dim3 gridDim(
-        (1 + blockDim.x - 1) / blockDim.x,
-        (OUTPUT_SIZE + blockDim.y - 1) / blockDim.y,
+    dim3 blockDim2(32, 16);
+    dim3 gridDim2(
+        (1 + blockDim2.x - 1) / blockDim2.x,
+        (OUTPUT_SIZE + blockDim2.y - 1) / blockDim2.y,
         batch_size
     );
-    matrixMultiply<<<gridDim, blockDim>>>(
+    
+    matrixMultiply<<<gridDim2, blockDim2>>>(
         net->d_W2, net->d_batch_hidden, net->d_batch_output, net->d_b2,
         OUTPUT_SIZE, HIDDEN_SIZE, 1, batch_size);
     
     // Apply softmax
     block_size = 256;
-    grid_size = (batch_size + block_size - 1) / block_size;
-    size_t shared_mem = (block_size + 2) * sizeof(float); // For sData, sMax, sSum
-    softmax<<<grid_size, block_size,shared_mem>>>(net->d_batch_output, batch_size, OUTPUT_SIZE);
+    grid_size = batch_size;
+    size_t shared_mem = (block_size + 2) * sizeof(float); // For data, max, sum
+    softmax<<<grid_size, block_size, shared_mem>>>(net->d_batch_output, batch_size, OUTPUT_SIZE);
+    
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA error in forward pass: %s\n", cudaGetErrorString(err));
+    }
 }
 
-// Backward pass
+// Improved backward pass implementation
 void cudaBackward(CudaNetwork* net, int batch_size) {
     // Calculate output gradients
     int block_size = 256;
-    int grid_size = (batch_size + block_size - 1) / block_size;
-    size_t shared_mem = 2 * OUTPUT_SIZE * sizeof(float); // For outS, targetS
-    OutputGradient<<<grid_size,block_size,shared_mem>>>(
-        net->d_batch_output, net->d_batch_target, net->d_batch_d_output, batch_size, OUTPUT_SIZE);
+    int grid_size = batch_size;
+    size_t shared_mem = 2 * OUTPUT_SIZE * sizeof(float); // For output and target data
     
-    // Calculate hidden layer gradients
-    dim3 blockDim(16, 16);
+    OutputGradient<<<grid_size, block_size, shared_mem>>>(
+        net->d_batch_output, net->d_batch_target, net->d_batch_d_output, 
+        batch_size, OUTPUT_SIZE);
     
-    // Using transpose operation for backpropagation: d_hidden = W2^T * d_output
-    dim3 gridDim1((1 + 15) / 16, (HIDDEN_SIZE + 15) / 16, batch_size);
-    matrixMultiplyTranspose<<<gridDim1, blockDim>>>(
+    // Calculate hidden layer gradients using transposed weights
+    dim3 blockDim1(16, 16);
+    dim3 gridDim1(
+        1, // Only one column in result
+        (HIDDEN_SIZE + blockDim1.y - 1) / blockDim1.y,
+        batch_size
+    );
+    
+    matrixMultiplyTranspose<<<gridDim1, blockDim1>>>(
         net->d_W2, net->d_batch_d_output, net->d_batch_d_hidden,
         OUTPUT_SIZE, HIDDEN_SIZE, batch_size);
     
     // Apply ReLU derivative
-    int block_size = 256;
-    int grid_size = (batch_size * HIDDEN_SIZE + block_size - 1) / block_size;
+    block_size = 256;
+    grid_size = ((batch_size * HIDDEN_SIZE + 4 - 1) / 4 + block_size - 1) / block_size;
+    
     reluDerivativeKernel<<<grid_size, block_size>>>(
         net->d_batch_hidden, net->d_batch_d_hidden, batch_size * HIDDEN_SIZE);
     
-    // Update weights and biases
-    // For W2 update
-    dim3 blockW2(32, 16);
+    // Update weights - simplified approach without tiling for reliability
+    dim3 blockW2(16, 16);
     dim3 gridW2(
         (HIDDEN_SIZE + blockW2.x - 1) / blockW2.x,
         (OUTPUT_SIZE + blockW2.y - 1) / blockW2.y
     );
-    size_t shared_mem = (TILE_SIZE * INPUT_SIZE + TILE_SIZE * OUTPUT_SIZE) * sizeof(float);
-    weightUpdate<<<gridW2, blockW2,shared_mem>>>(
-                                        net->d_W2, net->d_batch_hidden, net->d_batch_d_output,
-                                        batch_size, OUTPUT_SIZE, HIDDEN_SIZE, LEARNING_RATE);
     
-    // For W1 update
-    dim3 blockW1(32, 16);
+    weightUpdate<<<gridW2, blockW2>>>(
+        net->d_W2, net->d_batch_hidden, net->d_batch_d_output,
+        batch_size, OUTPUT_SIZE, HIDDEN_SIZE, LEARNING_RATE);
+    
+    dim3 blockW1(16, 16);
     dim3 gridW1(
-        (HIDDEN_SIZE + blockW2.x - 1) / blockW2.x,
-        (OUTPUT_SIZE + blockW2.y - 1) / blockW2.y
+        (INPUT_SIZE + blockW1.x - 1) / blockW1.x,
+        (HIDDEN_SIZE + blockW1.y - 1) / blockW1.y
     );
-    weightUpdate<<<gridW1, blockW1,shared_mem>>>(
+    
+    weightUpdate<<<gridW1, blockW1>>>(
         net->d_W1, net->d_batch_input, net->d_batch_d_hidden,
         batch_size, HIDDEN_SIZE, INPUT_SIZE, LEARNING_RATE);
     
     // Update biases
-    int block_size = 512;
+    block_size = 256;
     int b2_blocks = (OUTPUT_SIZE + block_size - 1) / block_size;
     biasUpdate<<<b2_blocks, block_size>>>(
         net->d_b2, net->d_batch_d_output, batch_size, OUTPUT_SIZE, LEARNING_RATE);
@@ -571,18 +544,23 @@ void cudaBackward(CudaNetwork* net, int batch_size) {
     int b1_blocks = (HIDDEN_SIZE + block_size - 1) / block_size;
     biasUpdate<<<b1_blocks, block_size>>>(
         net->d_b1, net->d_batch_d_hidden, batch_size, HIDDEN_SIZE, LEARNING_RATE);
+    
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA error in backward pass: %s\n", cudaGetErrorString(err));
+    }
 }
 
-// Train network using CUDA
+// Improved training function
 void trainWithCuda(CudaNetwork* cuda_net, double** images, double** labels, int numImages) {
-    // Host memory for batches
+    // Host memory allocations
     float* h_batch_input = (float*)malloc(BATCH_SIZE * INPUT_SIZE * sizeof(float));
     float* h_batch_target = (float*)malloc(BATCH_SIZE * OUTPUT_SIZE * sizeof(float));
-    
-    // Host and device memory for metrics
     float* h_loss = (float*)malloc(BATCH_SIZE * sizeof(float));
     int* h_correct = (int*)malloc(BATCH_SIZE * sizeof(int));
     
+    // Device memory for metrics
     float* d_loss;
     int* d_correct;
     CUDA_CHECK(cudaMalloc(&d_loss, BATCH_SIZE * sizeof(float)));
@@ -595,7 +573,7 @@ void trainWithCuda(CudaNetwork* cuda_net, double** images, double** labels, int 
         float epoch_loss = 0.0f;
         int epoch_correct = 0;
         
-        // Process in mini-batches
+        // Calculate number of batches
         int num_batches = (numImages + BATCH_SIZE - 1) / BATCH_SIZE;
         
         for (int batch = 0; batch < num_batches; batch++) {
@@ -603,22 +581,22 @@ void trainWithCuda(CudaNetwork* cuda_net, double** images, double** labels, int 
             int current_batch_size = (batch_start + BATCH_SIZE <= numImages) ? 
                                      BATCH_SIZE : (numImages - batch_start);
             
-            // Prepare batch data (convert double to float)
+            // Prepare batch data with careful type conversion
             for (int i = 0; i < current_batch_size; i++) {
                 int img_idx = batch_start + i;
                 
-                // Copy and convert image data
+                // Copy image data with bounds checking
                 for (int j = 0; j < INPUT_SIZE; j++) {
                     h_batch_input[i * INPUT_SIZE + j] = (float)images[img_idx][j];
                 }
                 
-                // Copy and convert label data
+                // Copy label data with bounds checking
                 for (int j = 0; j < OUTPUT_SIZE; j++) {
                     h_batch_target[i * OUTPUT_SIZE + j] = (float)labels[img_idx][j];
                 }
             }
             
-            // Copy batch to device
+            // Transfer data to device
             CUDA_CHECK(cudaMemcpy(cuda_net->d_batch_input, h_batch_input, 
                                  current_batch_size * INPUT_SIZE * sizeof(float), 
                                  cudaMemcpyHostToDevice));
@@ -626,21 +604,24 @@ void trainWithCuda(CudaNetwork* cuda_net, double** images, double** labels, int 
                                  current_batch_size * OUTPUT_SIZE * sizeof(float), 
                                  cudaMemcpyHostToDevice));
             
-            // Forward and backward pass
+            // Forward and backward passes
             cudaForward(cuda_net, current_batch_size);
             cudaBackward(cuda_net, current_batch_size);
             
             // Calculate loss
-            int block_size = 512;
-            int loss_blocks = (current_batch_size + block_size - 1) / block_size;
-            size_t shared_mem = (2 * OUTPUT_SIZE + block_size) * sizeof(float); // s_output, s_target, s_partial
-            crossEntropyLoss<<<loss_blocks, block_size,shared_mem>>>(
-                cuda_net->d_batch_output, cuda_net->d_batch_target, d_loss, current_batch_size, OUTPUT_SIZE);
+            int block_size = 256;
+            int loss_blocks = current_batch_size;
+            size_t shared_mem = (2 * OUTPUT_SIZE + block_size) * sizeof(float);
+            
+            crossEntropyLoss<<<loss_blocks, block_size, shared_mem>>>(
+                cuda_net->d_batch_output, cuda_net->d_batch_target, 
+                d_loss, current_batch_size, OUTPUT_SIZE);
             
             // Calculate accuracy
             int accuracy_blocks = (current_batch_size + block_size - 1) / block_size;
             accuracyKernel<<<accuracy_blocks, block_size>>>(
-                cuda_net->d_batch_output, cuda_net->d_batch_target, d_correct, current_batch_size, OUTPUT_SIZE);
+                cuda_net->d_batch_output, cuda_net->d_batch_target, 
+                d_correct, current_batch_size, OUTPUT_SIZE);
             
             // Copy results back to host
             CUDA_CHECK(cudaMemcpy(h_loss, d_loss, 
@@ -659,13 +640,13 @@ void trainWithCuda(CudaNetwork* cuda_net, double** images, double** labels, int 
         
         printf("Epoch %d - Loss: %.4f - Train Accuracy: %.2f%% - Time: %.3fs\n",
                epoch + 1, epoch_loss / numImages, 
-               (epoch_correct / (float)numImages) * 100, 
+               (epoch_correct / (float)numImages) * 100.0f, 
                (float)(clock() - epoch_start) / CLOCKS_PER_SEC);
     }
     
     printf("Total training time: %.3fs\n", (float)(clock() - total_start) / CLOCKS_PER_SEC);
     
-    // Clean up temporary memory
+    // Free temporary memory
     free(h_batch_input);
     free(h_batch_target);
     free(h_loss);

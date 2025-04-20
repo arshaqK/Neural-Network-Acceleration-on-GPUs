@@ -249,10 +249,24 @@ int main() {
     double** test_labels = loadMNISTLabels("data/t10k-labels.idx1-ubyte", 10000);
 
     NeuralNetwork* net = createNetwork();
-    train(net, train_images, train_labels, 60000);
-    evaluate(net, test_images, test_labels, 10000);
+    // train(net, train_images, train_labels, 60000);
+    // evaluate(net, test_images, test_labels, 10000);
 
+    //sample test run for cuda
+    printf("Cuda Runtime V3 starts here...\n");
+    CudaNetwork* cuda_net = createCudaNetwork(net->W1, net->W2, net->b1, net->b2);
+    trainWithCuda(cuda_net, train_images, train_labels, 60000);
+    updateHostNetwork(net->W1, net->W2, net->b1, net->b2, cuda_net);
+    float accuracy;
+    evaluateWithCuda(cuda_net, test_images, test_labels, 10000, &accuracy);
+    printf("Test Accuracy: %.2f%%\n", accuracy);
+    //free memory
+    freeCudaNetwork(cuda_net);
     freeNetwork(net);
+    freeMatrix(train_images, 60000);
+    freeMatrix(train_labels, 60000);
+    freeMatrix(test_images, 10000);
+    freeMatrix(test_labels, 10000);
     return 0;
 }
 
