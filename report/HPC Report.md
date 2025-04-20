@@ -46,7 +46,9 @@ This report explores the performance acceleration of a simple fully connected ne
     - `forward()`: [44.363%]
         
     - `backward()`: [49.039%]
-        
+
+![image](https://github.com/user-attachments/assets/59c31fda-e70b-4095-abd5-df05c479ee3b)
+
 
 **Observations:**  
 CPU-bound operations, particularly matrix multiplications and weight updates, dominate time complexity. No use of SIMD or threading.
