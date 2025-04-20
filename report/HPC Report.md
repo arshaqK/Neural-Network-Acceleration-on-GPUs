@@ -4,6 +4,8 @@
 
 ### GitHub Repository: https://github.com/arshaqK/Neural-Network-Acceleration-on-GPUs/tree/master (Main for Project Submission)
 
+### Presentation: https://docs.google.com/presentation/d/1MFKEoj1a91RdgRyF7rPHOS-PPBuwbGjqRf7nvhiuoKc/edit?usp=sharing
+
 ---
 
 ## Introduction
