@@ -17,7 +17,7 @@ TARGET = runV3
 OBJECTS = kernel.obj nn.obj
 
 # Source files
-SOURCES = V3/kernel.cu nn.c
+SOURCES = kernel.cu ../nn.c
 
 # Default target
 all: $(TARGET)
