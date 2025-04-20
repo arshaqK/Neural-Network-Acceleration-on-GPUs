@@ -555,106 +555,122 @@ void cudaBackward(CudaNetwork* net, int batch_size) {
 // Improved training function
 void trainWithCuda(CudaNetwork* cuda_net, double** images, double** labels, int numImages) {
     // Host memory allocations
-    printf("\nEpochs: %d",EPOCHS);
-    printf("\nBatch size: %d\n",BATCH_SIZE);
+    printf("\nEpochs: %d", EPOCHS);
+    printf("\nBatch size: %d\n", BATCH_SIZE);
     float* h_batch_input = (float*)malloc(BATCH_SIZE * INPUT_SIZE * sizeof(float));
     float* h_batch_target = (float*)malloc(BATCH_SIZE * OUTPUT_SIZE * sizeof(float));
     float* h_loss = (float*)malloc(BATCH_SIZE * sizeof(float));
     int* h_correct = (int*)malloc(BATCH_SIZE * sizeof(int));
-    
+
     // Device memory for metrics
     float* d_loss;
     int* d_correct;
     CUDA_CHECK(cudaMalloc(&d_loss, BATCH_SIZE * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_correct, BATCH_SIZE * sizeof(int)));
+
+    // GPU Timing events
+    cudaEvent_t total_start, total_end, epoch_start, epoch_end;
+    CUDA_CHECK(cudaEventCreate(&total_start));
+    CUDA_CHECK(cudaEventCreate(&total_end));
+    CUDA_CHECK(cudaEventCreate(&epoch_start));
+    CUDA_CHECK(cudaEventCreate(&epoch_end));
     
-    clock_t total_start = clock();
-    
+    CUDA_CHECK(cudaEventRecord(total_start));
+
     for (int epoch = 0; epoch < EPOCHS; epoch++) {
-        clock_t epoch_start = clock();
+        CUDA_CHECK(cudaEventRecord(epoch_start));
+
         float epoch_loss = 0.0f;
         int epoch_correct = 0;
-        
-        // Calculate number of batches
+
         int num_batches = (numImages + BATCH_SIZE - 1) / BATCH_SIZE;
-        
+
         for (int batch = 0; batch < num_batches; batch++) {
             int batch_start = batch * BATCH_SIZE;
-            int current_batch_size = (batch_start + BATCH_SIZE <= numImages) ? 
+            int current_batch_size = (batch_start + BATCH_SIZE <= numImages) ?
                                      BATCH_SIZE : (numImages - batch_start);
-            
-            // Prepare batch data with careful type conversion
+
+            // Prepare batch
             for (int i = 0; i < current_batch_size; i++) {
                 int img_idx = batch_start + i;
-                
-                // Copy image data with bounds checking
                 for (int j = 0; j < INPUT_SIZE; j++) {
                     h_batch_input[i * INPUT_SIZE + j] = (float)images[img_idx][j];
                 }
-                
-                // Copy label data with bounds checking
                 for (int j = 0; j < OUTPUT_SIZE; j++) {
                     h_batch_target[i * OUTPUT_SIZE + j] = (float)labels[img_idx][j];
                 }
             }
-            
-            // Transfer data to device
-            CUDA_CHECK(cudaMemcpy(cuda_net->d_batch_input, h_batch_input, 
-                                 current_batch_size * INPUT_SIZE * sizeof(float), 
-                                 cudaMemcpyHostToDevice));
-            CUDA_CHECK(cudaMemcpy(cuda_net->d_batch_target, h_batch_target, 
-                                 current_batch_size * OUTPUT_SIZE * sizeof(float), 
-                                 cudaMemcpyHostToDevice));
-            
-            // Forward and backward passes
+
+            // Copy to device
+            CUDA_CHECK(cudaMemcpy(cuda_net->d_batch_input, h_batch_input,
+                                  current_batch_size * INPUT_SIZE * sizeof(float),
+                                  cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpy(cuda_net->d_batch_target, h_batch_target,
+                                  current_batch_size * OUTPUT_SIZE * sizeof(float),
+                                  cudaMemcpyHostToDevice));
+
+            // Forward and backward pass
             cudaForward(cuda_net, current_batch_size);
             cudaBackward(cuda_net, current_batch_size);
-            
-            // Calculate loss
+
+            // Loss and accuracy kernels
             int block_size = 256;
             int loss_blocks = current_batch_size;
             size_t shared_mem = (2 * OUTPUT_SIZE + block_size) * sizeof(float);
-            
+
             crossEntropyLoss<<<loss_blocks, block_size, shared_mem>>>(
-                cuda_net->d_batch_output, cuda_net->d_batch_target, 
+                cuda_net->d_batch_output, cuda_net->d_batch_target,
                 d_loss, current_batch_size, OUTPUT_SIZE);
-            
-            // Calculate accuracy
+
             int accuracy_blocks = (current_batch_size + block_size - 1) / block_size;
             accuracyKernel<<<accuracy_blocks, block_size>>>(
-                cuda_net->d_batch_output, cuda_net->d_batch_target, 
+                cuda_net->d_batch_output, cuda_net->d_batch_target,
                 d_correct, current_batch_size, OUTPUT_SIZE);
-            
-            // Copy results back to host
-            CUDA_CHECK(cudaMemcpy(h_loss, d_loss, 
-                                 current_batch_size * sizeof(float), 
-                                 cudaMemcpyDeviceToHost));
-            CUDA_CHECK(cudaMemcpy(h_correct, d_correct, 
-                                 current_batch_size * sizeof(int), 
-                                 cudaMemcpyDeviceToHost));
-            
-            // Accumulate metrics
+
+            // Copy back results
+            CUDA_CHECK(cudaMemcpy(h_loss, d_loss,
+                                  current_batch_size * sizeof(float),
+                                  cudaMemcpyDeviceToHost));
+            CUDA_CHECK(cudaMemcpy(h_correct, d_correct,
+                                  current_batch_size * sizeof(int),
+                                  cudaMemcpyDeviceToHost));
+
             for (int i = 0; i < current_batch_size; i++) {
                 epoch_loss += h_loss[i];
                 epoch_correct += h_correct[i];
             }
         }
-        
+
+        CUDA_CHECK(cudaEventRecord(epoch_end));
+        CUDA_CHECK(cudaEventSynchronize(epoch_end));
+
+        float epoch_time_ms;
+        CUDA_CHECK(cudaEventElapsedTime(&epoch_time_ms, epoch_start, epoch_end));
+
         printf("Epoch %d - Loss: %.4f - Train Accuracy: %.2f%% - Time: %.3fs\n",
-               epoch + 1, epoch_loss / numImages, 
-               (epoch_correct / (float)numImages) * 100.0f, 
-               (float)(clock() - epoch_start) / CLOCKS_PER_SEC);
+               epoch + 1, epoch_loss / numImages,
+               (epoch_correct / (float)numImages) * 100.0f,
+               epoch_time_ms / 1000.0f);
     }
-    
-    printf("Total training time: %.3fs\n", (float)(clock() - total_start) / CLOCKS_PER_SEC);
-    
-    // Free temporary memory
+
+    CUDA_CHECK(cudaEventRecord(total_end));
+    CUDA_CHECK(cudaEventSynchronize(total_end));
+
+    float total_time_ms;
+    CUDA_CHECK(cudaEventElapsedTime(&total_time_ms, total_start, total_end));
+    printf("Total training time: %.3fs\n", total_time_ms / 1000.0f);
+
+    // Free
     free(h_batch_input);
     free(h_batch_target);
     free(h_loss);
     free(h_correct);
     CUDA_CHECK(cudaFree(d_loss));
     CUDA_CHECK(cudaFree(d_correct));
+    CUDA_CHECK(cudaEventDestroy(total_start));
+    CUDA_CHECK(cudaEventDestroy(total_end));
+    CUDA_CHECK(cudaEventDestroy(epoch_start));
+    CUDA_CHECK(cudaEventDestroy(epoch_end));
 }
 
 // Update host network from device network

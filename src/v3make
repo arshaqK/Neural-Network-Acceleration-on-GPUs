@@ -1,0 +1,42 @@
+# Makefile for compiling and linking CUDA neural network implementation
+
+# Compiler
+NVCC = nvcc
+
+# Compiler flags
+NVCCFLAGS = -c
+INCLUDE = -I V3/
+
+# Linker flags
+LDFLAGS = -lcudart
+
+# Target executable
+TARGET = runV3
+
+# Object files
+OBJECTS = kernel.obj nn.obj
+
+# Source files
+SOURCES = V3/kernel.cu nn.c
+
+# Default target
+all: $(TARGET)
+
+# Link object files to create executable
+$(TARGET): $(OBJECTS)
+	$(NVCC) $(OBJECTS) -o $@ $(LDFLAGS)
+
+# Compile kernel.cu to kernel.obj
+kernel.obj: V3/kernel.cu
+	$(NVCC) $(NVCCFLAGS) $< -o $@
+
+# Compile nn.c to nn.o
+nn.obj: nn.c
+	$(NVCC) $(NVCCFLAGS) $(INCLUDE) $< -o $@
+
+# Clean up generated files
+clean:
+	rm -f $(TARGET) $(OBJECTS)
+
+# Phony targets
+.PHONY: all clean
