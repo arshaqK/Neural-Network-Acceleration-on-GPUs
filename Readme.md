@@ -7,7 +7,7 @@ Sure! Here's a polished and informative `README.md` tailored for your GitHub pro
 **Course:** High Performance Computing  
 **Team Members:** Muaz Ahmed · Arshaq Kirmani · Ibtehaj Haider  
 **Repository:** [GitHub Link](https://github.com/arshaqK/Neural-Network-Acceleration-on-GPUs/tree/master)  
-**Report:** (https://drive.google.com/file/d/1PDlFQCK2RdJ0WdXa9qTWxkOnqOxZkh4v/view?usp=sharing)
+**Report:** [Report Link](https://drive.google.com/file/d/1PDlFQCK2RdJ0WdXa9qTWxkOnqOxZkh4v/view?usp=sharing)
 **Presentation:** [Google Slides](https://docs.google.com/presentation/d/1MFKEoj1a91RdgRyF7rPHOS-PPBuwbGjqRf7nvhiuoKc/)
 
 ---
