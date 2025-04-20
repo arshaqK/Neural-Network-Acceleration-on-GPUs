@@ -1,21 +1,16 @@
 CC = gcc
-CFLAGS = -Wall -O2 -pg -no-pie
-LDFLAGS = -lm -pg -no-pie
+CFLAGS = -Wall -O2
 
 EXE = nn.exe
 SRC = nn.c
 
-all: $(EXE)
+all: $(EXE) run
 
 $(EXE): $(SRC)
-	$(CC) $(CFLAGS) -o $(EXE) $(SRC) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $(EXE) $(SRC) -lm
 
 run: $(EXE)
 	./$(EXE)
 
-profile: $(EXE) run
-	gprof $(EXE) gmon.out > profile_report.txt
-	cat profile_report.txt | less
-
 clean:
-	rm -f $(EXE) gmon.out profile_report.txt
+	rm -f $(EXE)
