@@ -39,7 +39,7 @@ This report explores the performance acceleration of a simple fully connected ne
     
 - **Profiling Tool:** gprof
     
-- **Execution Time:** ~[Insert total seconds here]
+- **Execution Time:** ~[97.5]
     
 - **Key Bottlenecks (gprof):**
     
