@@ -1,0 +1,80 @@
+MNIST Neural Network
+
+Cuda Runtime V3 starts here...
+
+Epochs: 3
+Batch size: 64
+Epoch 1 - Loss: 2.2520 - Train Accuracy: 15.28% - Time: 0.703s
+Epoch 2 - Loss: 1.7088 - Train Accuracy: 48.83% - Time: 0.685s
+Epoch 3 - Loss: 1.0506 - Train Accuracy: 67.04% - Time: 0.686s
+Total training time: 2.074s
+Test Accuracy: 72.05%
+MNIST Neural Network
+
+Cuda Runtime V3 starts here...
+
+Epochs: 5
+Batch size: 64
+Epoch 1 - Loss: 2.2504 - Train Accuracy: 15.51% - Time: 0.710s
+Epoch 2 - Loss: 1.7241 - Train Accuracy: 47.78% - Time: 0.695s
+Epoch 3 - Loss: 1.0736 - Train Accuracy: 66.45% - Time: 0.681s
+Epoch 4 - Loss: 0.8625 - Train Accuracy: 72.87% - Time: 0.694s
+Epoch 5 - Loss: 0.7730 - Train Accuracy: 75.69% - Time: 0.717s
+Total training time: 3.497s
+Test Accuracy: 78.34%
+MNIST Neural Network
+
+Cuda Runtime V3 starts here...
+
+Epochs: 8
+Batch size: 64
+Epoch 1 - Loss: 2.2458 - Train Accuracy: 16.26% - Time: 0.693s
+Epoch 2 - Loss: 1.6836 - Train Accuracy: 49.32% - Time: 0.680s
+Epoch 3 - Loss: 1.0540 - Train Accuracy: 67.03% - Time: 0.695s
+Epoch 4 - Loss: 0.8479 - Train Accuracy: 73.38% - Time: 0.687s
+Epoch 5 - Loss: 0.7594 - Train Accuracy: 76.12% - Time: 0.688s
+Epoch 6 - Loss: 0.7066 - Train Accuracy: 77.86% - Time: 0.672s
+Epoch 7 - Loss: 0.6712 - Train Accuracy: 79.06% - Time: 0.672s
+Epoch 8 - Loss: 0.6474 - Train Accuracy: 79.84% - Time: 0.678s
+Total training time: 5.465s
+Test Accuracy: 80.54%
+MNIST Neural Network
+
+Cuda Runtime V3 starts here...
+
+Epochs: 3
+Batch size: 32
+Epoch 1 - Loss: 1.9748 - Train Accuracy: 33.54% - Time: 0.912s
+Epoch 2 - Loss: 0.9223 - Train Accuracy: 71.79% - Time: 0.916s
+Epoch 3 - Loss: 0.6821 - Train Accuracy: 78.92% - Time: 0.911s
+Total training time: 2.739s
+Test Accuracy: 81.74%
+MNIST Neural Network
+
+Cuda Runtime V3 starts here...
+
+Epochs: 5
+Batch size: 32
+Epoch 1 - Loss: 1.9733 - Train Accuracy: 33.54% - Time: 0.913s
+Epoch 2 - Loss: 0.9245 - Train Accuracy: 71.76% - Time: 0.889s
+Epoch 3 - Loss: 0.6840 - Train Accuracy: 78.86% - Time: 0.918s
+Epoch 4 - Loss: 0.6031 - Train Accuracy: 81.59% - Time: 0.910s
+Epoch 5 - Loss: 0.5533 - Train Accuracy: 83.32% - Time: 0.888s
+Total training time: 4.518s
+Test Accuracy: 85.01%
+MNIST Neural Network
+
+Cuda Runtime V3 starts here...
+
+Epochs: 8
+Batch size: 32
+Epoch 1 - Loss: 1.9469 - Train Accuracy: 34.56% - Time: 0.935s
+Epoch 2 - Loss: 0.9074 - Train Accuracy: 71.93% - Time: 0.894s
+Epoch 3 - Loss: 0.6829 - Train Accuracy: 78.93% - Time: 0.917s
+Epoch 4 - Loss: 0.5972 - Train Accuracy: 81.75% - Time: 0.922s
+Epoch 5 - Loss: 0.5460 - Train Accuracy: 83.49% - Time: 0.897s
+Epoch 6 - Loss: 0.5096 - Train Accuracy: 84.66% - Time: 0.892s
+Epoch 7 - Loss: 0.4839 - Train Accuracy: 85.52% - Time: 0.870s
+Epoch 8 - Loss: 0.4630 - Train Accuracy: 86.18% - Time: 0.890s
+Total training time: 7.218s
+Test Accuracy: 87.21%

@@ -555,6 +555,8 @@ void cudaBackward(CudaNetwork* net, int batch_size) {
 // Improved training function
 void trainWithCuda(CudaNetwork* cuda_net, double** images, double** labels, int numImages) {
     // Host memory allocations
+    printf("\nEpochs: %d",EPOCHS);
+    printf("\nBatch size: %d\n",BATCH_SIZE);
     float* h_batch_input = (float*)malloc(BATCH_SIZE * INPUT_SIZE * sizeof(float));
     float* h_batch_target = (float*)malloc(BATCH_SIZE * OUTPUT_SIZE * sizeof(float));
     float* h_loss = (float*)malloc(BATCH_SIZE * sizeof(float));
