@@ -1,7 +1,3 @@
-Sure! Here's a polished and informative `README.md` tailored for your GitHub project:
-
----
-
 # 🧠 Neural Network Acceleration on GPUs (HPC Final Project)
 
 **Course:** High Performance Computing  
